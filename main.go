@@ -1,12 +1,18 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/evanwiseman/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 const (
@@ -15,6 +21,7 @@ const (
 )
 
 type apiConfig struct {
+	dbQueries      *database.Queries
 	fileServerHits atomic.Int32
 }
 
@@ -59,6 +66,8 @@ func (cfg *apiConfig) metricsReset(w http.ResponseWriter, r *http.Request) {
 
 func cleanChirp(s string) string {
 	words := strings.Fields(s)
+
+	// Words to censor/clean
 	wordBank := map[string]struct{}{
 		"kerfuffle": {},
 		"sharbert":  {},
@@ -119,7 +128,21 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	apiCfg := apiConfig{}
+	// Load .env
+	godotenv.Load()
+
+	// Load postgres database
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("failed to open database %v", dbURL)
+	}
+
+	// Create API Config
+	apiCfg := apiConfig{
+		dbQueries:      database.New(db),
+		fileServerHits: atomic.Int32{},
+	}
 
 	serveMux := http.NewServeMux()
 
