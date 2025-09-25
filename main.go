@@ -32,9 +32,18 @@ func healthzHandler(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) Handler(w http.ResponseWriter, r *http.Request) {
 	hits := cfg.fileServerHits.Load()
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	html := fmt.Sprintf(`<html>
+	<body>
+		<h1>Welcome, Chirpy Admin</h1>
+		<p>Chirpy has been visited %d times!</p>
+	</body>
+</html>`,
+		hits,
+	)
+
+	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Hits: %v", hits)
+	fmt.Fprint(w, html)
 }
 
 func (cfg *apiConfig) Reset(w http.ResponseWriter, r *http.Request) {
@@ -57,9 +66,9 @@ func main() {
 
 	// Attach handlers to the serve mux
 	serveMux.Handle("/app/", apiCfg.middlewareMetricsInc(appHandler))
-	serveMux.HandleFunc("/healthz", healthzHandler)
-	serveMux.HandleFunc("/metrics", apiCfg.Handler)
-	serveMux.HandleFunc("/reset", apiCfg.Reset)
+	serveMux.HandleFunc("GET /api/healthz", healthzHandler)
+	serveMux.HandleFunc("GET /admin/metrics", apiCfg.Handler)
+	serveMux.HandleFunc("POST /admin/reset", apiCfg.Reset)
 
 	// Create the server at the desired port and attach the serve mux
 	server := http.Server{
