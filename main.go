@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -56,13 +57,29 @@ func (cfg *apiConfig) metricsReset(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Reset Metrics. Hits: %v", hits)
 }
 
+func cleanChirp(s string) string {
+	words := strings.Fields(s)
+	wordBank := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+	for i, w := range words {
+		if _, ok := wordBank[strings.ToLower(w)]; ok {
+			words[i] = "****"
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
 	type returnVals struct {
-		Error string `json:"error"`
-		Valid bool   `json:"valid"`
+		Error       string `json:"error"`
+		Valid       bool   `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	// Set the header
@@ -85,6 +102,7 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusBadRequest
 	} else {
 		respBody.Valid = true
+		respBody.CleanedBody = cleanChirp(params.Body)
 	}
 
 	data, err := json.Marshal(respBody)
