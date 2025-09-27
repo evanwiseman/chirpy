@@ -50,13 +50,7 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	})
 }
 
-func handlerHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "OK")
-}
-
-func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerGetMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	hits := cfg.fileServerHits.Load()
@@ -73,7 +67,7 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, html)
 }
 
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerPostReset(w http.ResponseWriter, r *http.Request) {
 	// Don't reset if not on development database
 	if cfg.platform != "dev" {
 		w.WriteHeader(http.StatusForbidden)
@@ -90,6 +84,58 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func handlerHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "OK")
+}
+
+func (cfg *apiConfig) handlerPostUsers(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+
+	// Set the header
+	w.Header().Set("Content-Type", "application/json")
+
+	// Decode the json from the request
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		log.Printf("unable decode: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Create a user in the database with the email
+	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	if err != nil {
+		log.Printf("unable create user: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Format the response
+	resp := User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+
+	// Pack the data
+	data, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("unable to marshal user: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write(data)
 }
 
 func cleanChirp(s string) string {
@@ -117,7 +163,17 @@ func validateChirp(body string) error {
 	return nil
 }
 
-func (cfg *apiConfig) handlerAddChirp(w http.ResponseWriter, r *http.Request) {
+func formatChirp(c database.Chirp) Chirp {
+	return Chirp{
+		ID:        c.ID,
+		CreatedAt: c.CreatedAt,
+		UpdatedAt: c.UpdatedAt,
+		Body:      c.Body,
+		UserID:    c.UserID,
+	}
+}
+
+func (cfg *apiConfig) handlerPostChirps(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body   string    `json:"body"`
 		UserID uuid.UUID `json:"user_id"`
@@ -126,40 +182,39 @@ func (cfg *apiConfig) handlerAddChirp(w http.ResponseWriter, r *http.Request) {
 	// Set the header
 	w.Header().Set("Content-Type", "application/json")
 
-	// Decode the json from the request into Body
+	// Decode the json from the request
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
-
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, `{"error": "invalid format: %v"}`, err)
 		return
 	}
 
+	// Validate the chirp
 	err = validateChirp(params.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, `{"error": "invalid chirp: %v"}`, err)
+		return
 	}
 
+	// Create the chrip in the database
 	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body:   cleanChirp(params.Body),
+		Body:   cleanChirp(params.Body), // provide a cleaned chirp
 		UserID: params.UserID,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error": "unable to create chirp: %v"}`, err)
+		return
 	}
 
-	resp := Chirp{
-		ID:        chirp.ID,
-		CreatedAt: chirp.CreatedAt,
-		UpdatedAt: chirp.UpdatedAt,
-		Body:      chirp.Body,
-		UserID:    chirp.UserID,
-	}
+	// Format the response
+	resp := formatChirp(chirp)
 
+	// Pack the data
 	data, err := json.Marshal(resp)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -171,44 +226,57 @@ func (cfg *apiConfig) handlerAddChirp(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (cfg *apiConfig) handlerAddEmail(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Email string `json:"email"`
-	}
-
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
-
+	chirps, err := cfg.db.GetChirps(r.Context())
 	if err != nil {
-		log.Printf("unable decode: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error": "unable to get chirps: %v"}`, err)
 		return
 	}
 
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
-	if err != nil {
-		log.Printf("unable create user: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	resp := User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+	var resp []Chirp
+	for _, chirp := range chirps {
+		resp = append(resp, formatChirp(chirp))
 	}
 
 	data, err := json.Marshal(resp)
 	if err != nil {
-		log.Printf("unable to marshal user: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "uanble to marshal data: %v"}`, err)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+func (cfg *apiConfig) handlerGetChripByID(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"error": "invalid chirpID: %v"}`, err)
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	chirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error": "unable to get chirp '%v': %v}`, chirpID, err)
+		return
+	}
+
+	resp := formatChirp(chirp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to marshal data: %v"}`, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
 
@@ -238,11 +306,15 @@ func main() {
 
 	// Attach handlers to the serve mux
 	serveMux.Handle("/app/", apiCfg.middlewareMetricsInc(appHandler))
+
+	serveMux.HandleFunc("GET /admin/metrics", apiCfg.handlerGetMetrics)
+	serveMux.HandleFunc("POST /admin/reset", apiCfg.handlerPostReset)
+
 	serveMux.HandleFunc("GET /api/healthz", handlerHealthz)
-	serveMux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
-	serveMux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
-	serveMux.HandleFunc("POST /api/users", apiCfg.handlerAddEmail)
-	serveMux.HandleFunc("POST /api/chirps", apiCfg.handlerAddChirp)
+	serveMux.HandleFunc("POST /api/users", apiCfg.handlerPostUsers)
+	serveMux.HandleFunc("POST /api/chirps", apiCfg.handlerPostChirps)
+	serveMux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
+	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChripByID)
 
 	// Create the server at the desired port and attach the serve mux
 	server := http.Server{
