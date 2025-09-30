@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/evanwiseman/chirpy/internal/auth"
 	"github.com/evanwiseman/chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -29,10 +30,11 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID             uuid.UUID `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Email          string    `json:"email"`
+	HashedPassword string    `json:"hashed_password"`
 }
 
 type Chirp struct {
@@ -92,9 +94,20 @@ func handlerHealthz(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "OK")
 }
 
+func formatUser(u database.User) User {
+	return User{
+		ID:             u.ID,
+		CreatedAt:      u.CreatedAt,
+		UpdatedAt:      u.UpdatedAt,
+		Email:          u.Email,
+		HashedPassword: u.HashedPassword,
+	}
+}
+
 func (cfg *apiConfig) handlerPostUsers(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	// Set the header
@@ -105,36 +118,86 @@ func (cfg *apiConfig) handlerPostUsers(w http.ResponseWriter, r *http.Request) {
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		log.Printf("unable decode: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"error": "invalid format: %v"}`, err)
+		return
+	}
+
+	// Hash the password
+	hashed_password, err := auth.HashPassword(params.Password)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to hash password: %v"}`, err)
 		return
 	}
 
 	// Create a user in the database with the email
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashed_password,
+	})
 	if err != nil {
-		log.Printf("unable create user: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to create user: %v"}`, err)
 		return
 	}
 
 	// Format the response
-	resp := User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-	}
+	resp := formatUser(user)
 
 	// Pack the data
 	data, err := json.Marshal(resp)
 	if err != nil {
-		log.Printf("unable to marshal user: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to marshal data: %v"}`, err)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
+	w.Write(data)
+}
+
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	var params parameters
+	err := decoder.Decode(&params)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"error": "invalid format: %v"}`, err)
+		return
+	}
+
+	user, err := cfg.db.GetUserByEmail(r.Context(), params.Email)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	ok, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "hashing failed: %v"}`, err)
+		return
+	}
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	resp := formatUser(user)
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "hashing failed: %v"}`, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
 
@@ -311,7 +374,10 @@ func main() {
 	serveMux.HandleFunc("POST /admin/reset", apiCfg.handlerPostReset)
 
 	serveMux.HandleFunc("GET /api/healthz", handlerHealthz)
+
 	serveMux.HandleFunc("POST /api/users", apiCfg.handlerPostUsers)
+	serveMux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
+
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.handlerPostChirps)
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChripByID)
