@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/evanwiseman/chirpy/internal/auth"
 	"github.com/evanwiseman/chirpy/internal/database"
 	"github.com/evanwiseman/chirpy/internal/models"
 	"github.com/google/uuid"
@@ -38,8 +39,7 @@ func validateChirp(body string) error {
 
 func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 
 	// Set the header
@@ -55,6 +55,20 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate the user
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "couldn't get bearer token: %v"}`, err)
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.JWTSecret)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "couldn't validate jwt: %v"}`, err)
+		return
+	}
+
 	// Validate the chirp
 	err = validateChirp(params.Body)
 	if err != nil {
@@ -66,7 +80,7 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 	// Create the chrip in the database
 	chirp, err := cfg.DB.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   cleanChirp(params.Body), // provide a cleaned chirp
-		UserID: params.UserID,
+		UserID: userID,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

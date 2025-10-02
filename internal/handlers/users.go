@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/evanwiseman/chirpy/internal/auth"
 	"github.com/evanwiseman/chirpy/internal/database"
@@ -49,7 +50,12 @@ func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Format the response
-	resp := models.FormatUser(user)
+	resp, err := models.FormatUser(user)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to format response: %v"}`, err)
+		return
+	}
 
 	// Pack the data
 	data, err := json.Marshal(resp)
@@ -65,8 +71,9 @@ func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -78,11 +85,21 @@ func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If not specified set to 1 hour
+	if params.ExpiresInSeconds == 0 {
+		params.ExpiresInSeconds = 3600
+	}
+	// Clamp to 1 hour if greater than 1 hour
+	params.ExpiresInSeconds = min(params.ExpiresInSeconds, 3600)
+
+	// Find a user with the specified email
 	user, err := cfg.DB.GetUserByEmail(r.Context(), params.Email)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+
+	// Validate their credentials
 	ok, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -94,7 +111,21 @@ func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := models.FormatUser(user)
+	// Generate the token
+	expiresIn := time.Duration(params.ExpiresInSeconds) * time.Second
+	token, err := auth.MakeJWT(user.ID, cfg.JWTSecret, expiresIn)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "couldn't generate token: %v"}`, err)
+	}
+
+	// Format a response with the token
+	resp, err := models.FormatUserWithToken(user, token)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to format response: %v"}`, err)
+		return
+	}
 
 	data, err := json.Marshal(resp)
 	if err != nil {
