@@ -121,6 +121,7 @@ func (cfg *APIConfig) HandlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error": "uanble to marshal data: %v"}`, err)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)

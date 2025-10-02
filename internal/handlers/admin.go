@@ -33,6 +33,7 @@ func (cfg *APIConfig) HandlerPostReset(w http.ResponseWriter, r *http.Request) {
 	// Don't reset if not on development database
 	if cfg.Platform != "dev" {
 		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, `{"error": "unable to reset when not no dev database"}`)
 		return
 	}
 
@@ -43,6 +44,7 @@ func (cfg *APIConfig) HandlerPostReset(w http.ResponseWriter, r *http.Request) {
 	err := cfg.DB.ResetUsers(r.Context())
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "failed to reset user database: %v"}`, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

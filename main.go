@@ -58,6 +58,9 @@ func main() {
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.HandlerGetChirps)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.HandlerGetChripByID)
 
+	serveMux.HandleFunc("POST /api/refresh", apiCfg.HandlerRefresh)
+	serveMux.HandleFunc("POST /api/revoke", apiCfg.HandlerRevoke)
+
 	// Create the server at the desired port and attach the serve mux
 	server := http.Server{
 		Handler: serveMux,

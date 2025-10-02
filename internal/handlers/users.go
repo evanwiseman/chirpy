@@ -11,6 +11,11 @@ import (
 	"github.com/evanwiseman/chirpy/internal/models"
 )
 
+const (
+	jwtExpirationInSeconds  = 3600
+	refreshExpirationInDays = 60
+)
+
 func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email    string `json:"email"`
@@ -50,12 +55,7 @@ func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Format the response
-	resp, err := models.FormatUser(user)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error": "unable to format response: %v"}`, err)
-		return
-	}
+	resp := models.FormatUser(user, "", "")
 
 	// Pack the data
 	data, err := json.Marshal(resp)
@@ -71,11 +71,11 @@ func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
+	// Decode the body into params
 	decoder := json.NewDecoder(r.Body)
 	var params parameters
 	err := decoder.Decode(&params)
@@ -85,22 +85,16 @@ func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If not specified set to 1 hour
-	if params.ExpiresInSeconds == 0 {
-		params.ExpiresInSeconds = 3600
-	}
-	// Clamp to 1 hour if greater than 1 hour
-	params.ExpiresInSeconds = min(params.ExpiresInSeconds, 3600)
-
-	// Find a user with the specified email
-	user, err := cfg.DB.GetUserByEmail(r.Context(), params.Email)
+	// Find a dbUser with the specified email
+	dbUser, err := cfg.DB.GetUserByEmail(r.Context(), params.Email)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "unable to validate credentials, invalid email: %v"}`, err)
 		return
 	}
 
 	// Validate their credentials
-	ok, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	ok, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error": "hashing failed: %v"}`, err)
@@ -108,29 +102,46 @@ func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "unable to validate credentials, invalid password: %v"}`, err)
 		return
 	}
 
-	// Generate the token
-	expiresIn := time.Duration(params.ExpiresInSeconds) * time.Second
-	token, err := auth.MakeJWT(user.ID, cfg.JWTSecret, expiresIn)
+	// Generate access token
+	expiresIn := time.Duration(jwtExpirationInSeconds) * time.Second
+	jwtToken, err := auth.MakeJWT(dbUser.ID, cfg.JWTSecret, expiresIn)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error": "couldn't generate token: %v"}`, err)
-	}
-
-	// Format a response with the token
-	resp, err := models.FormatUserWithToken(user, token)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error": "unable to format response: %v"}`, err)
+		fmt.Fprintf(w, `{"error": "couldn't generate jwt token: %v"}`, err)
 		return
 	}
 
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "couldn't generate refresh token %v"}`, err)
+		return
+	}
+	expiresIn = time.Duration(refreshExpirationInDays) * time.Hour * 24
+
+	_, err = cfg.DB.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    dbUser.ID,
+		ExpiresAt: time.Now().Add(expiresIn),
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "couldn't create refresh token in database: %v}`, err)
+		return
+	}
+
+	// Format a response
+	resp := models.FormatUser(dbUser, jwtToken, refreshToken)
+
+	// Pack response
 	data, err := json.Marshal(resp)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error": "hashing failed: %v"}`, err)
+		fmt.Fprintf(w, `{"error": "unable to marshal data: %v"}`, err)
 		return
 	}
 
