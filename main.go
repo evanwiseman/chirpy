@@ -35,6 +35,7 @@ func main() {
 		FileServerHits: atomic.Int32{},
 		Platform:       os.Getenv("PLATFORM"),
 		JWTSecret:      os.Getenv("JWT_SECRET"),
+		PolkaKey:       os.Getenv("POLKA_KEY"),
 	}
 
 	serveMux := http.NewServeMux()
@@ -62,6 +63,8 @@ func main() {
 
 	serveMux.HandleFunc("POST /api/refresh", apiCfg.HandlerRefresh)
 	serveMux.HandleFunc("POST /api/revoke", apiCfg.HandlerRevoke)
+
+	serveMux.HandleFunc("POST /api/polka/webhooks", apiCfg.HandlerUpgradeUserChirpyRed)
 
 	// Create the server at the desired port and attach the serve mux
 	server := http.Server{

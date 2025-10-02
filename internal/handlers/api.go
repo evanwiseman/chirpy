@@ -13,6 +13,7 @@ type APIConfig struct {
 	FileServerHits atomic.Int32
 	Platform       string
 	JWTSecret      string
+	PolkaKey       string
 }
 
 func HandlerHealthz(w http.ResponseWriter, r *http.Request) {
