@@ -10,6 +10,8 @@ import (
 )
 
 func (cfg *APIConfig) HandlerRefresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	// Get the refresh token
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -68,6 +70,8 @@ func (cfg *APIConfig) HandlerRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *APIConfig) HandlerRevoke(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	// Get the refresh token
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {

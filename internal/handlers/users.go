@@ -68,6 +68,8 @@ func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *APIConfig) HandlerPutUsers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	// Get access token
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -132,6 +134,8 @@ func (cfg *APIConfig) HandlerPutUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	// Decode the body into params
 	decoder := json.NewDecoder(r.Body)
 	params := struct {

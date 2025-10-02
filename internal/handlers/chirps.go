@@ -55,13 +55,15 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Validate the user
+	// Get the access token
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprintf(w, `{"error": "couldn't get bearer token: %v"}`, err)
 		return
 	}
+
+	// Validate the access token
 	userID, err := auth.ValidateJWT(token, cfg.JWTSecret)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -105,6 +107,7 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *APIConfig) HandlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
 	chirps, err := cfg.DB.GetChirps(r.Context())
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
