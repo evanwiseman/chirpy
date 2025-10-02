@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func cleanChirp(s string) string {
+func cleanChirpBody(s string) string {
 	words := strings.Fields(s)
 
 	// Words to censor/clean
@@ -30,7 +30,7 @@ func cleanChirp(s string) string {
 }
 
 // Validates
-func validateChirp(body string) error {
+func validateChirpBody(body string) error {
 	if len(body) > 140 {
 		return fmt.Errorf("chirp is too long")
 	}
@@ -38,16 +38,13 @@ func validateChirp(body string) error {
 }
 
 func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	// Set the header
 	w.Header().Set("Content-Type", "application/json")
 
 	// Decode the json from the request
 	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
+	params := struct {
+		Body string `json:"body"`
+	}{}
 	err := decoder.Decode(&params)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -72,7 +69,7 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Validate the chirp
-	err = validateChirp(params.Body)
+	err = validateChirpBody(params.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, `{"error": "invalid chirp: %v"}`, err)
@@ -80,8 +77,8 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Create the chrip in the database
-	chirp, err := cfg.DB.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body:   cleanChirp(params.Body), // provide a cleaned chirp
+	dbChirp, err := cfg.DB.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   cleanChirpBody(params.Body), // provide a cleaned chirp
 		UserID: userID,
 	})
 	if err != nil {
@@ -91,7 +88,7 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Format the response
-	resp := models.FormatChirp(chirp)
+	resp := models.FormatChirp(dbChirp)
 
 	// Pack the data
 	data, err := json.Marshal(resp)
@@ -108,18 +105,21 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 func (cfg *APIConfig) HandlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	chirps, err := cfg.DB.GetChirps(r.Context())
+	// Get a list of all chirps
+	dbChirps, err := cfg.DB.GetChirps(r.Context())
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `{"error": "unable to get chirps: %v"}`, err)
 		return
 	}
 
+	// Format a response
 	var resp []models.Chirp
-	for _, chirp := range chirps {
-		resp = append(resp, models.FormatChirp(chirp))
+	for _, dbChirp := range dbChirps {
+		resp = append(resp, models.FormatChirp(dbChirp))
 	}
 
+	// Pack response
 	data, err := json.Marshal(resp)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -134,6 +134,7 @@ func (cfg *APIConfig) HandlerGetChirps(w http.ResponseWriter, r *http.Request) {
 func (cfg *APIConfig) HandlerGetChripByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	// Get the chirp
 	chirpIDStr := r.PathValue("chirpID")
 	chirpID, err := uuid.Parse(chirpIDStr)
 	if err != nil {
@@ -141,15 +142,14 @@ func (cfg *APIConfig) HandlerGetChripByID(w http.ResponseWriter, r *http.Request
 		fmt.Fprintf(w, `{"error": "invalid chirpID: %v"}`, err)
 		return
 	}
-
-	chirp, err := cfg.DB.GetChirp(r.Context(), chirpID)
+	dbChirp, err := cfg.DB.GetChirp(r.Context(), chirpID)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `{"error": "unable to get chirp '%v': %v}`, chirpID, err)
 		return
 	}
 
-	resp := models.FormatChirp(chirp)
+	resp := models.FormatChirp(dbChirp)
 	data, err := json.Marshal(resp)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -159,4 +159,55 @@ func (cfg *APIConfig) HandlerGetChripByID(w http.ResponseWriter, r *http.Request
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
+}
+
+func (cfg *APIConfig) HandlerDeleteChirpByID(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Get the acces token
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "malformed access token: %v"}`, err)
+		return
+	}
+
+	// Validate the access token
+	userID, err := auth.ValidateJWT(token, cfg.JWTSecret)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "invalid access token: %v"}`, err)
+		return
+	}
+
+	// Get the chirp
+	chirpIDStr := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"error": "invalid chirpID: %v"}`, err)
+		return
+	}
+	dbChirp, err := cfg.DB.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error": "unable to get chirp '%v': %v}`, chirpID, err)
+		return
+	}
+
+	// Check that the requester is the author
+	if userID != dbChirp.UserID {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, `{"error": "forbidden, unable to delete chirp: requester is not owner"}`)
+		return
+	}
+
+	// Delete the chirp
+	err = cfg.DB.DeleteChirp(r.Context(), dbChirp.ID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error": "chirp not found: %v"}`, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
