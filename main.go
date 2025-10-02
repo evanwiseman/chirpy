@@ -52,6 +52,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/healthz", handlers.HandlerHealthz)
 
 	serveMux.HandleFunc("POST /api/users", apiCfg.HandlerPostUsers)
+	serveMux.HandleFunc("PUT /api/users", apiCfg.HandlerPutUsers)
 	serveMux.HandleFunc("POST /api/login", apiCfg.HandlerLogin)
 
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.HandlerPostChirps)

@@ -17,17 +17,15 @@ const (
 )
 
 func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-
 	// Set the header
 	w.Header().Set("Content-Type", "application/json")
 
 	// Decode the json from the request
 	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
+	params := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}{}
 	err := decoder.Decode(&params)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -69,15 +67,77 @@ func (cfg *APIConfig) HandlerPostUsers(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+func (cfg *APIConfig) HandlerPutUsers(w http.ResponseWriter, r *http.Request) {
+	// Get access token
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "unable to access token: %v"}`, err)
+		return
 	}
 
+	// Validate the access token
+	userID, err := auth.ValidateJWT(token, cfg.JWTSecret)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error": "invalid access token: %v"}`, err)
+		return
+	}
+
+	// Decode the body into parameters
+	decoder := json.NewDecoder(r.Body)
+	params := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"error": "invalid format: %v"}`, err)
+		return
+	}
+
+	// Hash the password
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "failed to hash password: %v"}`, err)
+		return
+	}
+
+	// Update the user with the provided information
+	newUser, err := cfg.DB.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to update user: %v"}`, err)
+	}
+
+	// Format a response
+	resp := models.FormatUser(newUser, token, "")
+
+	// Pack response
+	data, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "unable to marshal data: %v"}`, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 	// Decode the body into params
 	decoder := json.NewDecoder(r.Body)
-	var params parameters
+	params := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}{}
 	err := decoder.Decode(&params)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -107,26 +167,28 @@ func (cfg *APIConfig) HandlerLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate access token
-	expiresIn := time.Duration(jwtExpirationInSeconds) * time.Second
-	jwtToken, err := auth.MakeJWT(dbUser.ID, cfg.JWTSecret, expiresIn)
+	expiresAt := time.Duration(jwtExpirationInSeconds) * time.Second
+	jwtToken, err := auth.MakeJWT(dbUser.ID, cfg.JWTSecret, expiresAt)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error": "couldn't generate jwt token: %v"}`, err)
 		return
 	}
 
+	// Generate a refresh token
 	refreshToken, err := auth.MakeRefreshToken()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error": "couldn't generate refresh token %v"}`, err)
 		return
 	}
-	expiresIn = time.Duration(refreshExpirationInDays) * time.Hour * 24
 
+	// Add refresh token to database
+	expiresAt = time.Duration(refreshExpirationInDays) * time.Hour * 24
 	_, err = cfg.DB.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
 		Token:     refreshToken,
 		UserID:    dbUser.ID,
-		ExpiresAt: time.Now().Add(expiresIn),
+		ExpiresAt: time.Now().Add(expiresAt),
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
