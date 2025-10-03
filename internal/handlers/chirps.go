@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/evanwiseman/chirpy/internal/auth"
@@ -105,14 +106,49 @@ func (cfg *APIConfig) HandlerPostChirps(w http.ResponseWriter, r *http.Request) 
 func (cfg *APIConfig) HandlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Get a list of all chirps
-	dbChirps, err := cfg.DB.GetChirps(r.Context())
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, `{"error": "unable to get chirps: %v"}`, err)
-		return
+	var (
+		dbChirps []database.Chirp
+		err      error
+	)
+
+	if r.URL.Query().Has("author_id") { // Query by user id
+		userID, err := uuid.Parse(r.URL.Query().Get("author_id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `{"error": "unable to parse author id: %v"}`, err)
+			return
+		}
+		dbChirps, err = cfg.DB.GetChripsByUserID(r.Context(), userID)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, `{"error": "unable to find user %v: %v"}`, userID, err)
+			return
+		}
+	} else { // Get all chirps
+		dbChirps, err = cfg.DB.GetChirps(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, `{"error": "unable to get chirps: %v"}`, err)
+			return
+		}
 	}
 
+	// Filter in memory for sort dir asc or desc
+	if r.URL.Query().Has("sort") {
+		sort := r.URL.Query().Get("sort")
+		var direction int
+		switch sort {
+		case "asc":
+			direction = 1
+		case "desc":
+			direction = -1
+		default:
+			direction = 0
+		}
+		slices.SortFunc(dbChirps, func(a database.Chirp, b database.Chirp) int {
+			return a.CreatedAt.Compare(b.CreatedAt) * direction
+		})
+	}
 	// Format a response
 	var resp []models.Chirp
 	for _, dbChirp := range dbChirps {
@@ -149,7 +185,10 @@ func (cfg *APIConfig) HandlerGetChripByID(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Format a response
 	resp := models.FormatChirp(dbChirp)
+
+	// Pack data
 	data, err := json.Marshal(resp)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
